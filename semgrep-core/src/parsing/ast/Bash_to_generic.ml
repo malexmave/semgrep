@@ -42,25 +42,108 @@
 
    Mapping to the generic AST:
 
-   pipeline -> pipeline statement, made of a sequence of statements
-   command -> statement
-   simple command -> function call, which is an expression
-   variable assignment -> variable assignment
-   function definition -> function definition
-   for loop -> for loop, which is a statement
+   We consider that bash is a domain-specific language. It has a
+   variety of syntactic constructs that can be expressed with
+   functions in general-purpose programming languages. The whole
+   program is considered an expression to be evaluated by the shell
+   runtime. The program is more like data than statements, so we
+   translate it to an expression. The translation goes roughly like this:
+
+   list -> Constructor ("!sh_list!", pipelines)
+   pipeline -> Constructor ("!sh_pipeline!", commands)
+   simple command -> Constructor ("!sh_simple_cmd!", arguments)
+   literal 'hello' -> L ("hello")
+   simple $ expansion -> Constructor ("!sh_expand!",
+                           Constructor("!sh_get!", [var_name])
+                         )
+   ${x#.c} expansion -> Constructor ("!sh_expand!", [
+                          Constructor ("!sh_rm_prefix!",
+                            [Constructor("!sh_get!", [var_name]);
+                             L (".c")]
+                          )]
+                        )
 *)
 
 open! Common
 open AST_bash
+module PI = Parse_info
 module G = AST_generic
 
-(*module H = AST_generic_helpers*)
+(*****************************************************************************)
+(* Helpers *)
+(*****************************************************************************)
 
-let rec list_ (x : list_) : G.stmt list = List.map pipeline x |> List.flatten
+let str (tok : Parse_info.t) : string * tok = (PI.str_of_info tok, tok)
 
-and pipeline (x : pipeline) : G.stmt list =
-  let commands, _control_op = x in
-  (* for now, unsupported constructs are simply omitted from the generic AST *)
+(*****************************************************************************)
+(* Builtin Bash constructors *)
+(*****************************************************************************)
+
+let mkcons s =
+  let name = "!sh_" ^ s ^ "!" in
+  (name, G.fake name)
+
+let sh_list = lazy (mkcons "list")
+
+let sh_ctrl = lazy (mkcons "ctrl")
+
+let sh_pipeline = lazy (mkcons "pipeline")
+
+let sh_simple_cmd = lazy (mkcons "simple_cmd")
+
+let sh_get = lazy (mkcons "get")
+
+let sh_expand = lazy (mkcons "expand")
+
+(*
+   'cons' and 'invis' are for representing most nodes of a shell program.
+
+   Use 'cons' when the original construct starts with a token which
+   otherwise would be discarded. This allows accurate location tracking.
+
+   Sample usage:
+     cons dollar_tok sh_get [var_name]
+*)
+let cons start_tok lazy_cons_name expressions =
+  G.Constructor ([ (snd (Lazy.force lazy_cons_name), start_tok) ], expressions)
+
+(*
+   Use 'invis' when the first token of the first argument is also
+   the first token of the whole construct. This is the case for simple
+   commands such as 'echo hello'.
+
+   Sample usage:
+     invis sh_pipeline [cmd1; cmd2]
+*)
+let invis lazy_cons_name expressions =
+  G.Constructor ([ Lazy.force lazy_cons_name ], expressions)
+
+(*
+   This is broken because we should represent the whole region, not
+   just its first token. Can we have a location = (start, end_)
+   systematically for each node of the generic AST?
+*)
+let expr_todo tokens =
+  let any = List.map (fun tok -> G.TodoK (str tok)) tokens in
+  G.OtherExpr (G.OE_Todo, any)
+
+(*****************************************************************************)
+(* Mapping *)
+(*****************************************************************************)
+
+let pipeline_control_operator = function
+  | Foreground tok (* ';' or '\n' or ';;' *)
+  | Background tok (* & *)
+  | And tok (* && *)
+  | Or tok (* || *) ->
+      G.String (str tok)
+
+let rec list_ (x : list_) : G.expr = invis sh_list (List.map pipeline x)
+
+and pipeline ((cmds, control_op) : pipeline) : G.expr =
+  invis sh_ctrl [ bare_pipeline cmds; pipeline_control_operator control_op ]
+
+and bare_pipeline (cmds : command list) : G.expr =
   List.filter_map
     (fun (_opt_bar, cmd_redir) -> command_with_redirects cmd_redir)
     commands
