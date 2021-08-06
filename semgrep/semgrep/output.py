@@ -265,7 +265,7 @@ class OutputHandler:
                 if self.settings.strict:
                     raise ex
                 logger.info(
-                    f"{error_stats}; run with --verbose for details or run with --strict to exit non-zero if any file cannot be analyzed"
+                    f"{error_stats}; run with --verbose for details or run with --strict to exit non-zero if any file cannot be analyzed cleanly"
                 )
         else:
             raise ex
@@ -308,7 +308,7 @@ class OutputHandler:
             # make a simplifying assumption that # errors = # files failed
             # it's a quite a bit of work to simplify further because errors may or may not have path, span, etc.
             error_stats = (
-                f"{len(self.semgrep_structured_errors)} files could not be analyzed"
+                f"found problems analyzing {len(self.semgrep_structured_errors)} files"
             )
             final_error = self.semgrep_structured_errors[-1]
         self.final_raise(final_error, error_stats)
